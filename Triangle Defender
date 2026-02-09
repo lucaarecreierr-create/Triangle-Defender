@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="ro">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Triangle Defender - Lucaa Edition</title>
+    <style>
+        body { margin: 0; overflow: hidden; background: #050505; font-family: 'Segoe UI', sans-serif; color: white; user-select: none; }
+        canvas { display: block; }
+
+        #ui-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
+        
+        .hud-container { position: absolute; top: 20px; left: 20px; width: calc(100% - 40px); display: flex; justify-content: space-between; pointer-events: auto; }
+        
+        .shop-wrapper { position: relative; }
+        #shop-btn { background: #222; padding: 10px 20px; cursor: pointer; border: 2px solid gold; font-weight: bold; border-radius: 5px; }
+        
+        #shop-menu { 
+            position: absolute; top: 50px; left: 0; width: 260px; 
+            background: rgba(15, 15, 15, 0.98); border: 2px solid #444; 
+            padding: 15px; border-radius: 8px; z-index: 100;
+        }
+
+        #coins-display { font-size: 28px; color: gold; font-weight: bold; text-shadow: 0 0 10px rgba(255,215,0,0.5); }
+
+        .menu { 
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); 
+            background: rgba(0,0,0,0.9); padding: 40px; border: 2px solid #333; 
+            text-align: center; border-radius: 20px; pointer-events: auto; box-shadow: 0 0 30px rgba(255,255,255,0.1);
+        }
+
+        input { padding: 12px; margin: 15px 0; width: 220px; background: #111; color: #fff; border: 1px solid #555; text-align: center; border-radius: 5px; }
+        button { background: #f39c12; color: #000; border: none; padding: 12px 25px; margin: 5px; cursor: pointer; font-weight: bold; border-radius: 5px; transition: 0.2s; }
+        button:hover { background: #f1c40f; transform: translateY(-2px); }
+        button:disabled { background: #333; color: #666; }
+
+        #watermark { position: absolute; bottom: 10px; right: 15px; font-size: 12px; color: rgba(255,255,255,0.4); pointer-events: none; }
+
+        .hidden { display: none !important; }
+        #boss-warning { position: absolute; top: 30%; left: 50%; transform: translateX(-50%); color: #ff3333; font-size: 50px; font-weight: bold; text-shadow: 0 0 20px red; animation: blink 0.5s infinite; }
+        @keyframes blink { 0% { opacity: 0; } 50% { opacity: 1; } 100% { opacity: 0; } }
+    </style>
+</head>
+<body>
+
+<canvas id="gameCanvas"></canvas>
+
+<div id="ui-layer">
+    <div class="hud-container">
+        <div class="shop-wrapper">
+            <div id="shop-btn" onclick="toggleShop()">🛒 SHOP</div>
+            <div id="shop-menu" class="hidden">
+                <div style="margin-bottom: 10px; border-bottom: 1px solid #444; color: gold;">UPGRADES</div>
+                <div style="font-size: 13px; line-height: 1.6;">
+                    Ruby Snipe (500c) <button onclick="buyItem('ruby', 500)">Buy</button><br>
+                    Emerald Skin (100c) <button onclick="buyItem('emerald', 100)">Buy</button><br>
+                    Blue Skin (10 min) <button id="blue-btn" onclick="claimBlue()" disabled>Claim</button>
+                </div>
+            </div>
+        </div>
+        <div id="coins-display">Coins: 0</div>
+    </div>
+
+    <div id="boss-warning" class="hidden">BOSS COMING!</div>
+
+    <!-- MAIN MENU -->
+    <div id="main-menu" class="menu">
+        <h1 style="color: #f1c40f; letter-spacing: 3px; margin-top: 0;">TRIANGLE DEFENDER</h1>
+        <p style="font-size: 12px; color: #888;">Insert Pilot Name</p>
+        <input type="text" id="pilot-name" placeholder="Pilot Name..." value="Interceptor">
+        <br>
+        <button onclick="startGame()" style="padding: 15px 50px; font-size: 18px;">DROP (START)</button>
+        <div style="margin-top: 20px; border-top: 1px solid #333; padding-top: 15px;">
+            <span style="font-size: 14px;">Equip Skin:</span><br>
+            <select id="skin-select" style="padding: 8px; margin-top: 10px; width: 100%; background: #222; color: white; border: 1px solid #444;"></select>
+        </div>
+    </div>
+
+    <!-- GAME OVER MENU -->
+    <div id="game-over" class="menu hidden">
+        <h1 style="color: #ff3333; font-size: 48px; text-shadow: 0 0 15px rgba(255,0,0,0.5);">GAME OVER</h1>
+        <p id="final-stats" style="white-space: pre-line; margin-bottom: 20px;"></p>
+        <button onclick="startGame()">ReDEPLOY</button>
+        <button onclick="showMainMenu()" style="background: #555; color: white;">Main Menu</button>
+    </div>
+
+    <div id="watermark">Made by Lucaa©</div>
+</div>
+
+<script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+
+    let gameActive = false, coins = 0, level = 1, gameTime = 0;
+    let enemies = [], bullets = [], particles = [], ownedSkins = ['yellow'], bossHitsRequired = 30;
+    let multipliers = { emerald: 1, ruby: 1 }, bulletsType = 'normal', audioStarted = false;
+    let startTime = Date.now();
+
+    const player = { x: canvas.width/2, y: canvas.height - 110, w: 50, h: 50, color: 'yellow' };
+    const keys = {};
+
+    let audioCtx;
+    function initAudio() {
+        if (audioStarted) return;
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const oscillator = audioCtx.createOscillator();
+        const gainNode = audioCtx.createGain();
+        oscillator.type = 'triangle';
+        oscillator.frequency.setValueAtTime(110, audioCtx.currentTime); 
+        gainNode.gain.setValueAtTime(0.03, audioCtx.currentTime);
+        oscillator.connect(gainNode);
+        gainNode.connect(audioCtx.destination);
+        oscillator.start();
+        audioStarted = true;
+    }
+
+    window.onkeydown = (e) => keys[e.code] = true;
+    window.onkeyup = (e) => keys[e.code] = false;
+    window.onmousedown = () => { if(gameActive) shoot(); if(!audioStarted) initAudio(); };
+
+    function initSkins() {
+        const sel = document.getElementById('skin-select');
+        sel.innerHTML = '';
+        ownedSkins.forEach(s => {
+            let opt = document.createElement('option');
+            opt.value = s; 
+            opt.innerText = s === 'yellow' ? 'BASE SKIN' : s.toUpperCase();
+            sel.appendChild(opt);
+        });
+    }
+    initSkins();
+
+    function toggleShop() { document.getElementById('shop-menu').classList.toggle('hidden'); }
+
+    function buyItem(type, cost) {
+        if(coins >= cost) {
+            coins -= cost;
+            if(type === 'ruby') { multipliers.ruby = 4; bulletsType = 'big'; if(!ownedSkins.includes('red')) ownedSkins.push('red'); }
+            if(type === 'emerald') { multipliers.emerald = 2; if(!ownedSkins.includes('emerald')) ownedSkins.push('emerald'); }
+            initSkins(); updateHUD();
+        }
+    }
+
+    function createExplosion(x, y, color) {
+        for(let i=0; i<15; i++) {
+            particles.push({
+                x: x, y: y,
+                vx: (Math.random() - 0.5) * 8,
+                vy: (Math.random() - 0.5) * 8,
+                life: 1.0,
+                color: color
+            });
+        }
+    }
+
+    function shoot() {
+        bullets.push({ x: player.x + player.w/2, y: player.y, r: bulletsType === 'big' ? 18 : 7 });
+    }
+
+    function updateHUD() {
+        document.getElementById('coins-display').innerText = `Coins: ${coins}`;
+        if(gameTime > 600) document.getElementById('blue-btn').disabled = false;
+    }
+
+    function startGame() {
+        gameActive = true;
+        enemies = [];
+        bullets = [];
+        particles = [];
+        level = 1;
+        startTime = Date.now();
+        
+        const selectedSkin = document.getElementById('skin-select').value;
+        player.color = selectedSkin === 'emerald' ? '#50C878' : (selectedSkin === 'blue' ? '#3498db' : selectedSkin);
+        
+        document.getElementById('main-menu').classList.add('hidden');
+        document.getElementById('game-over').classList.add('hidden');
+        initAudio();
+    }
+
+    function showMainMenu() {
+        document.getElementById('game-over').classList.add('hidden');
+        document.getElementById('main-menu').classList.remove('hidden');
+        gameActive = false;
+    }
+
+    function claimBlue() { if(!ownedSkins.includes('blue')) { ownedSkins.push('blue'); initSkins(); } }
+
+    class Enemy {
+        constructor(isBoss = false) {
+            this.isBoss = isBoss;
+            this.w = isBoss ? 160 : 60; 
+            this.h = isBoss ? 160 : 60;
+            this.x = Math.random() * (canvas.width - this.w);
+            this.y = -this.h;
+            this.hp = isBoss ? bossHitsRequired : 1;
+            this.type = Math.random() > 0.5 ? 'circle' : 'square';
+            this.isSpecial = !isBoss && Math.random() < 0.2;
+            this.color = this.isBoss ? '#ff0000' : (this.isSpecial ? '#DDA0DD' : '#A020F0');
+        }
+        draw() {
+            ctx.fillStyle = this.color;
+            if(this.isBoss) {
+                ctx.beginPath(); ctx.moveTo(this.x + this.w/2, this.y);
+                ctx.lineTo(this.x + this.w, this.y + this.h); ctx.lineTo(this.x, this.y + this.h); ctx.fill();
+            } else if(this.type === 'circle') {
+                ctx.beginPath(); ctx.arc(this.x + this.w/2, this.y + this.h/2, this.w/2, 0, Math.PI*2); ctx.fill();
+            } else { ctx.fillRect(this.x, this.y, this.w, this.h); }
+        }
+    }
+
+    function loop() {
+        ctx.clearRect(0,0,canvas.width, canvas.height);
+        ctx.fillStyle = '#1e5d1e'; ctx.fillRect(0, canvas.height-40, canvas.width, 40);
+
+        if(!gameActive) { requestAnimationFrame(loop); return; }
+
+        gameTime = (Date.now() - startTime) / 1000;
+        let spawnRate = gameTime < 25 ? 0.007 : 0.022 + (level * 0.005);
+        let moveSpeed = gameTime < 20 ? 1.8 : 2.5 + (level * 0.3);
+
+        if(keys['KeyA'] || keys['ArrowLeft']) player.x -= 9;
+        if(keys['KeyD'] || keys['ArrowRight']) player.x += 9;
+        player.x = Math.max(0, Math.min(canvas.width - player.w, player.x));
+
+        particles.forEach((p, i) => {
+            p.x += p.vx; p.y += p.vy; p.life -= 0.025;
+            if(p.life <= 0) particles.splice(i, 1);
+            ctx.fillStyle = p.color;
+            ctx.globalAlpha = p.life;
+            ctx.fillRect(p.x, p.y, 4, 4);
+            ctx.globalAlpha = 1;
+        });
+
+        ctx.fillStyle = player.color;
+        ctx.beginPath(); ctx.moveTo(player.x + player.w/2, player.y); 
+        ctx.lineTo(player.x + player.w, player.y + player.h); 
+        ctx.lineTo(player.x, player.y + player.h); ctx.fill();
+
+        if(level % 5 === 0 && enemies.filter(e => e.isBoss).length === 0) {
+            document.getElementById('boss-warning').classList.remove('hidden');
+            setTimeout(() => {
+                if(enemies.filter(e => e.isBoss).length === 0 && gameActive) enemies.push(new Enemy(true));
+                document.getElementById('boss-warning').classList.add('hidden');
+            }, 2000);
+            level++;
+        } else if(Math.random() < spawnRate && document.getElementById('boss-warning').classList.contains('hidden')) {
+             enemies.push(new Enemy());
+        }
+
+        bullets.forEach((b, bi) => {
+            b.y -= 14;
+            ctx.fillStyle = bulletsType === 'big' ? '#ff3300' : '#ffffff';
+            ctx.beginPath(); ctx.arc(b.x, b.y, b.r, 0, Math.PI*2); ctx.fill();
+            
+            enemies.forEach((en, ei) => {
+                if(b.x + b.r > en.x && b.x - b.r < en.x + en.w && b.y + b.r > en.y && b.y - b.r < en.y + en.h) {
+                    en.hp--; bullets.splice(bi, 1);
+                    if(en.hp <= 0) {
+                        createExplosion(en.x + en.w/2, en.y + en.h/2, en.color);
+                        coins += (en.isSpecial ? 2 : 1) * multipliers.emerald * multipliers.ruby;
+                        if(en.isBoss) { bossHitsRequired += 5; level++; }
+                        enemies.splice(ei, 1);
+                        updateHUD();
+                    }
+                }
+            });
+            if(b.y < 0) bullets.splice(bi, 1);
+        });
+
+        enemies.forEach((en, ei) => {
+            en.y += en.isBoss ? moveSpeed * 0.4 : moveSpeed;
+            en.draw();
+            if(en.y > canvas.height - 80) enemies.splice(ei, 1);
+            if(en.x < player.x+player.w && en.x+en.w > player.x && en.y < player.y+player.h && en.y+en.h > player.y) {
+                endGame();
+            }
+        });
+
+        requestAnimationFrame(loop);
+    }
+
+    function endGame() {
+        gameActive = false;
+        document.getElementById('game-over').classList.remove('hidden');
+        document.getElementById('final-stats').innerText = `Pilot: ${document.getElementById('pilot-name').value}\nTotal Coins: ${coins}`;
+    }
+
+    loop();
+</script>
+</body>
+</html>
